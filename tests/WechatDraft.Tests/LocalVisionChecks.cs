@@ -232,6 +232,25 @@ internal static class LocalVisionChecks
             }
             return Task.CompletedTask;
         });
+        yield return ("A maximised detached window keeps a left flush input instead of rejecting the frame", () =>
+        {
+            // 1194x1280 physical at 200 percent: the input toolbar starts 29 px from the window edge,
+            // which is less than the 16 dp inset, so the derived input edge used to go negative.
+            const uint dpi = 192;
+            const int width = 1194, toolbarX = 29, separator = 520;
+            using var image = TemplateLocatorChecks.Fixture(dpi, false, WechatToolbarTheme.Dark, width, width - 270, toolbarX);
+            using (var graphics = Graphics.FromImage(image))
+                graphics.DrawLine(Pens.Gray, 16, separator, width - 16, separator);
+
+            var (layout, anchors) = WechatLocalLayout.Locate(image, dpi, default, readWindowsTheme: () => WechatToolbarTheme.Dark);
+            if (anchors.BottomToolbar.X * width / 1000 > 40)
+                throw new Exception("The flush input toolbar was not located at the window edge.");
+            if (layout.Chat!.X > 0.5 || layout.Input!.X > 0.5)
+                throw new Exception($"A window-edge input was pushed inward to {layout.Input.X:0.##} per mille.");
+            if (Math.Abs(layout.Input!.Y * image.Height / 1000 - separator) > 1)
+                throw new Exception("The input divider moved for a left flush window.");
+            return Task.CompletedTask;
+        });
         yield return ("Local layout finds a tall editor boundary above two fifths of the window", () =>
         {
             const int separator = 310;

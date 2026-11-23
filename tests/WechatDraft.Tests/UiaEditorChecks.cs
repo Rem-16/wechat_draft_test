@@ -16,6 +16,15 @@ internal static class UiaEditorChecks
             if (selected.Count != 1 || selected[0] != 0) throw new Exception("The only chat input of a detached window was rejected.");
             return Task.CompletedTask;
         });
+        yield return ("A maximised detached window keeps an input flush with the window edge", () =>
+        {
+            // Measured on a 1194x1280 physical window at 200 percent: the single Edit control starts at
+            // 1.6% of the width. Any left-edge floor, including the earlier 6%, rejected it.
+            var selected = WechatAdapter.SelectChatEditors([Probe("", .016, .77, 575)], out var candidates);
+            if (candidates != 1 || selected.Count != 1 || selected[0] != 0)
+                throw new Exception("A chat input flush with the window edge was rejected.");
+            return Task.CompletedTask;
+        });
         yield return ("WeChat's own editor identifier outranks the left-edge heuristic", () =>
         {
             var selected = WechatAdapter.SelectChatEditors([Probe("", .25, .79, 300), Probe("chat_input_field", .117, .79, 436)], out var candidates);

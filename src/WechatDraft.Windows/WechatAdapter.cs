@@ -83,6 +83,58 @@ public sealed class WechatAdapter(nint target, bool enableAppend, nint assistant
         return windows;
     }
 
+    public sealed record EditControlDump(string AutomationId, string Name, string ClassName, bool Offscreen, bool Enabled,
+        bool ValuePattern, double LeftPercent, double TopPercent, double WidthDip, double HeightDip);
+
+    // Read-only inventory of every Edit control, including the ones the selection rejects. Diagnostics only:
+    // it never sets focus, never writes, and does not require the window to be foreground.
+    public static IReadOnlyList<EditControlDump> DumpEditControls(nint hwnd)
+    {
+        var root = AutomationElement.FromHandle(hwnd);
+        var bounds = root.Current.BoundingRectangle;
+        var scale = WindowLayoutRules.WindowDpi(hwnd) / 96d;
+        var edits = root.FindAll(TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+        var list = new List<EditControlDump>();
+        foreach (var editor in edits.Cast<AutomationElement>())
+        {
+            var rect = editor.Current.BoundingRectangle;
+            var readable = editor.TryGetCurrentPattern(ValuePattern.Pattern, out _);
+            list.Add(new(editor.Current.AutomationId, editor.Current.Name, editor.Current.ClassName ?? "",
+                editor.Current.IsOffscreen, editor.Current.IsEnabled, readable,
+                Math.Round((rect.Left - bounds.Left) / bounds.Width * 100, 1),
+                Math.Round((rect.Top - bounds.Top) / bounds.Height * 100, 1),
+                Math.Round(rect.Width / scale, 1), Math.Round(rect.Height / scale, 1)));
+        }
+        return list;
+    }
+
+    public sealed record ScrollControlDump(string AutomationId, string ClassName, bool Offscreen, bool VerticallyScrollable,
+        double VerticalScrollPercent, double VerticalViewSize, double LeftPercent, double TopPercent, double HeightDip);
+
+    // Read-only inventory of scrollable containers. Diagnostics only, same constraints as DumpEditControls.
+    public static IReadOnlyList<ScrollControlDump> DumpScrollControls(nint hwnd)
+    {
+        var root = AutomationElement.FromHandle(hwnd);
+        var bounds = root.Current.BoundingRectangle;
+        var scale = WindowLayoutRules.WindowDpi(hwnd) / 96d;
+        var all = root.FindAll(TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.IsScrollPatternAvailableProperty, true));
+        var list = new List<ScrollControlDump>();
+        foreach (var element in all.Cast<AutomationElement>())
+        {
+            var rect = element.Current.BoundingRectangle;
+            var pattern = (ScrollPattern)element.GetCurrentPattern(ScrollPattern.Pattern);
+            list.Add(new(element.Current.AutomationId, element.Current.ClassName ?? "", element.Current.IsOffscreen,
+                pattern.Current.VerticallyScrollable, Math.Round(pattern.Current.VerticalScrollPercent, 2),
+                Math.Round(pattern.Current.VerticalViewSize, 2),
+                Math.Round((rect.Left - bounds.Left) / bounds.Width * 100, 1),
+                Math.Round((rect.Top - bounds.Top) / bounds.Height * 100, 1),
+                Math.Round(rect.Height / scale, 1)));
+        }
+        return list;
+    }
+
     public static async Task<UiaRegionExport> ExportRegionsAsync(nint hwnd, CancellationToken cancellationToken)
     {
         if (!Native.IsWindow(hwnd) || Native.IsIconic(hwnd) || Native.GetForegroundWindow() != hwnd)
@@ -214,18 +266,18 @@ public sealed class WechatAdapter(nint target, bool enableAppend, nint assistant
 
     internal readonly record struct ChatEditorProbe(string AutomationId, double RelativeLeft, double RelativeTop, double WidthDip);
 
-    // Ranks the visible Edit controls of one WeChat window. The left-edge rule assumes the main window,
-    // where the conversation list occupies the left fifth. A detached single-chat window only has the
-    // icon rail, so its chat input starts at about 12% of the width and the old 20% rule rejected it
-    // outright. WeChat's own identifier now outranks position, and a lone candidate is accepted rather
-    // than discarding the only chat input on screen.
+    // Ranks the visible Edit controls of one WeChat window. Nothing here assumes a left margin: the
+    // conversation list of the main window is already excluded by the lower-half rule, and a detached
+    // single-chat window can put its input flush against the window edge. Measured left edges were 11.7%
+    // of the width for a rail-inset window and 1.6% for a maximised one, so any left-edge floor rejects
+    // real inputs. WeChat's own identifier ranks first, then the main-window guess, then a lone candidate.
     internal static IReadOnlyList<int> SelectChatEditors(IReadOnlyList<ChatEditorProbe> probes, out int candidateCount)
     {
         var candidates = new List<int>();
         for (var index = 0; index < probes.Count; index++)
         {
             var probe = probes[index];
-            if (probe.WidthDip > 180 && probe.RelativeTop > .48 && probe.RelativeLeft > .06) candidates.Add(index);
+            if (probe.WidthDip > 180 && probe.RelativeTop > .48) candidates.Add(index);
         }
         candidateCount = candidates.Count;
         var named = candidates.Where(index => probes[index].AutomationId == "chat_input_field").ToArray();
@@ -256,19 +308,26 @@ public sealed class WechatAdapter(nint target, bool enableAppend, nint assistant
                 : "未找到微信聊天输入框。请先打开目标单聊，点击输入框后重新检查。");
         }
         var probes = new List<(AutomationElement Element, ChatEditorProbe Probe)>();
+        // Diagnose every Edit control, including the ones the filters drop, so a debug artifact alone
+        // tells whether WeChat stopped exposing a value pattern or simply moved the input.
+        var described = new List<string>();
         foreach (var candidate in rawEditors.Cast<AutomationElement>())
         {
-            if (candidate.Current.IsOffscreen || !candidate.Current.IsEnabled) continue;
-            if (!candidate.TryGetCurrentPattern(ValuePattern.Pattern, out _)) continue;
             var rect = Logical(candidate.Current.BoundingRectangle);
-            probes.Add((candidate, new(candidate.Current.AutomationId,
-                (rect.Left - logicalBounds.Left) / logicalBounds.Width,
-                (rect.Top - logicalBounds.Top) / logicalBounds.Height, rect.Width)));
+            var relativeLeft = (rect.Left - logicalBounds.Left) / logicalBounds.Width;
+            var relativeTop = (rect.Top - logicalBounds.Top) / logicalBounds.Height;
+            var readable = candidate.TryGetCurrentPattern(ValuePattern.Pattern, out _);
+            if (described.Count < 6)
+                described.Add($"[{candidate.Current.AutomationId}] {(candidate.Current.IsOffscreen ? "不可见" : candidate.Current.IsEnabled ? "可用" : "已禁用")}" +
+                    $"/{(readable ? "可读写" : "无 ValuePattern")} 左 {relativeLeft * 100:0.#}% 上 {relativeTop * 100:0.#}% 宽 {rect.Width:0}");
+            if (candidate.Current.IsOffscreen || !candidate.Current.IsEnabled || !readable) continue;
+            probes.Add((candidate, new(candidate.Current.AutomationId, relativeLeft, relativeTop, rect.Width)));
         }
         var selected = SelectChatEditors(probes.Select(item => item.Probe).ToArray(), out var candidateCount);
         var editors = selected.Select(index => probes[index].Element).ToArray();
         if (editors.Length == 0)
-            throw new UiAutomationUnavailableException($"已读到 {rawEditors.Count} 个微信编辑控件，其中 {candidateCount} 个位于消息区下方且可读写，但都无法确认为聊天输入框。");
+            throw new UiAutomationUnavailableException(
+                $"已读到 {rawEditors.Count} 个微信编辑控件，其中 {candidateCount} 个位于消息区下方且可读写，但都无法确认为聊天输入框。控件：" + string.Join("；", described));
         if (editors.Length > 1)
             throw new InvalidOperationException($"检测到 {editors.Length} 个可能的聊天输入框，无法唯一确认目标，已停止自动处理。");
         var editor = editors[0]; var inputRect = editor.Current.BoundingRectangle;

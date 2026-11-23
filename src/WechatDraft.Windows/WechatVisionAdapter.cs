@@ -172,7 +172,9 @@ public sealed class WechatVisionAdapter(nint target, Action<TaskProgress>? progr
     {
         EnsureWindow(ct);
         var desktop = new Rectangle(Native.GetSystemMetrics(76), Native.GetSystemMetrics(77), Native.GetSystemMetrics(78), Native.GetSystemMetrics(79));
-        if (!desktop.Contains(_frame!.Bounds)) throw new InvalidOperationException("微信窗口部分位于屏幕之外，请完整显示后重试。");
+        if (!desktop.Contains(_frame!.Bounds))
+            throw new InvalidOperationException(
+                $"微信窗口部分位于屏幕之外（窗口 {_frame.Bounds.Width}x{_frame.Bounds.Height} 于 {_frame.Bounds.Left},{_frame.Bounds.Top}；屏幕 {desktop.Width}x{desktop.Height} 于 {desktop.Left},{desktop.Top}），请完整显示后重试。");
         for (var row = 0; row < 5; row++)
             for (var col = 0; col < 7; col++)
                 CheckPoint(_bounds.Left + 16 + (_bounds.Width - 32) * col / 6,

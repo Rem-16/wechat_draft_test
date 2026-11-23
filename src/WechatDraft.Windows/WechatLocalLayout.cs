@@ -129,12 +129,15 @@ internal static class WechatLocalLayout
         var scale = dpi / 96d;
         double Px(double value) => value * scale;
         var top = Pixels(anchors.TopToolbar, image.Size); var bottom = Pixels(anchors.BottomToolbar, image.Size);
-        var left = bottom.Left - (int)Px(16);
+        // The toolbar sits 16 dp inside the input box, so its left anchor minus 16 dp is the input edge.
+        // A maximised detached chat window puts that edge within 10 dp of the window border, making the
+        // difference negative; clamp at the window edge instead of rejecting an otherwise sound frame.
+        var left = Math.Max(0, bottom.Left - (int)Px(16));
         var right = image.Width - (int)Px(8);
         var titleTop = Math.Max(0, top.Top - (int)Px(8));
         var titleBottom = top.Bottom + (int)Px(8);
         var messageTop = top.Bottom + (int)Px(14);
-        if (left < 0 || right - left < Px(250) || top.Left - left < Px(100) ||
+        if (right - left < Px(250) || top.Left - left < Px(100) ||
             bottom.Right > right || messageTop >= bottom.Top)
             throw new System.IO.InvalidDataException("本地双锚点区域关系异常，未继续识别。");
         // Current WeChat puts the toolbar below the editor; older versions put it above.

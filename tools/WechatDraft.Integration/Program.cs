@@ -20,6 +20,21 @@ try
             identityRechecked = check.Rechecked, inputIssued = false }));
         return 0;
     }
+    if (mode == "uia-editors")
+    {
+        var windows = WechatAdapter.FindWindows();
+        var target = args.Length > 2 && long.TryParse(args[2], out var handle)
+            ? windows.SingleOrDefault(item => item.Handle.ToInt64() == handle)
+            : windows.Count == 1 ? windows[0] : null;
+        if (target is null) throw new InvalidDataException($"发现 {windows.Count} 个微信窗口；需唯一目标或指定有效窗口句柄：" +
+            string.Join(" | ", windows.Select(item => $"{item.Handle.ToInt64()} {item.Title}")));
+        var editors = WechatAdapter.DumpEditControls(target.Handle);
+        var scrollables = WechatAdapter.DumpScrollControls(target.Handle);
+        Console.WriteLine(JsonSerializer.Serialize(new { window = target.ToString(),
+            dpi = WindowLayoutRules.WindowDpi(target.Handle), editCount = editors.Count, editors,
+            scrollableCount = scrollables.Count, scrollables }, JsonDefaults.Options));
+        return 0;
+    }
     if (mode == "uia-regions")
     {
         if (args.Length < 2) throw new InvalidDataException("请指定标注图输出目录。");
